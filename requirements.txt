@@ -17,3 +17,4 @@ tqdm==4.66.4
 twilio==9.0.5
 Werkzeug==3.0.3
 yarl==1.9.4
+Flask-Session==0.8.0

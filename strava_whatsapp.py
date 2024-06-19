@@ -1,8 +1,14 @@
 import os
 import requests
-from flask import Flask, request, jsonify, render_template_string, redirect
+import markdown
+from flask import Flask, request, jsonify, render_template_string, redirect, session, url_for
+from openai import OpenAI
+from flask_session import Session
 
 app = Flask(__name__)
+app.secret_key = '4114'  # Replace with a secure key
+app.config['SESSION_TYPE'] = 'filesystem'
+Session(app)
 
 # Constants for Strava API
 CLIENT_ID = '125867'
@@ -20,15 +26,18 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 @app.route('/')
 def home():
+    access_token = session.get('access_token')
     return render_template_string('''
         <h1>Welcome to My Strava CLI</h1>
         <ul>
             <li><a href="/auth">Authenticate with Strava</a></li>
+            {% if access_token %}
             <li><a href="/get_stats">Get Athlete Stats</a></li>
             <li><a href="/ai_analysis">AI Analysis of Your Stats</a></li>
+            {% endif %}
             <li><a href="/exit">Exit</a></li>
         </ul>
-    ''')
+    ''', access_token=access_token)
 
 @app.route('/auth')
 def authenticate():
@@ -56,24 +65,33 @@ def get_token():
     response = requests.post(TOKEN_URL, data=data)
     if response.status_code == 200:
         access_token = response.json().get("access_token")
-        return redirect(f"/get_stats?access_token={access_token}")
+        session['access_token'] = access_token
+        return redirect(url_for('home'))
     else:
         return jsonify(response.json()), 400
 
 @app.route('/get_stats')
 def get_athlete_stats():
-    access_token = request.args.get('access_token')
+    access_token = session.get('access_token')
+    if not access_token:
+        return redirect(url_for('home'))
     stats_url = f"https://www.strava.com/api/v3/athletes/{ATHLETE_ID}/stats?access_token={access_token}"
     response = requests.get(stats_url)
     if response.status_code == 200:
         stats = response.json()
-        return jsonify(stats)
+        return render_template_string('''
+            <h1>Athlete Stats:</h1>
+            <pre>{{ stats }}</pre>
+            <a href="/">Go back to Home</a>
+        ''', stats=stats)
     else:
         return jsonify(response.json()), 400
 
 @app.route('/ai_analysis')
 def ai_analysis():
-    access_token = request.args.get('access_token')
+    access_token = session.get('access_token')
+    if not access_token:
+        return redirect(url_for('home'))
     stats_url = f"https://www.strava.com/api/v3/athletes/{ATHLETE_ID}/stats?access_token={access_token}"
     response = requests.get(stats_url)
     if response.status_code == 200:
@@ -81,22 +99,25 @@ def ai_analysis():
         stats_text = f"Analyze these stats: {stats}"
         OpenAI.api_key = OPENAI_API_KEY
         prompt = f"""
-        You are an AI personal trainer. Based on the following Strava athlete stats, provide detailed workout recommendations, insights, and words of encouragement to help the athlete improve their performance. The stats include recent activities, overall performance, and progress over time.
+        You are a worldclass personal trainer. Based on the following athlete stats, provide detailed workout recommendations, insights, to help the athlete improve their performance. The stats include recent activities, overall performance, and progress over time.
 
         Athlete Stats:
         {stats_text}
 
-        Your response should include:
+        Your response should be in HTML and include:
         1. Personalized workout recommendations tailored to the athlete's current fitness level and goals.
         2. Insights on the athlete's recent performance and areas for improvement.
         3. Encouragement and motivational tips to keep the athlete engaged and positive.
         4. Mention key numbers, stats and activities the user has done.
+        5. when speaking about distances use Kilometres.
+        6. go into Great amounts of Detail, specific exercises, pre and post workout nutritional recomendations.
+
 
         Begin your analysis with a friendly greeting and remember to be supportive and motivational throughout your response.
         """
         client = OpenAI()
         stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4-turbo",
             messages=[{"role": "user", "content": prompt}],
             stream=True,
         )
@@ -114,6 +135,7 @@ def ai_analysis():
 
 @app.route('/exit')
 def exit_app():
+    session.clear()
     return "Exiting the application. Goodbye!"
 
 if __name__ == '__main__':
